@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FenixMovilPro — AndroidManifest.xml
+  Permisos mínimos (autoridad: docs/seguridad.md — mínimo privilegio):
+    - INTERNET: Ktor loopback no la necesita, pero el instalador de CLIs
+      dentro del sandbox y los conectores gratuitos sí (COSTO-0: solo
+      endpoints gratuitos/locales declarados en datos_api.md).
+    - ACCESS_NETWORK_STATE: detección de red para el plan de instalación (B5).
+    - FOREGROUND_SERVICE(+DATA_SYNC): sandbox/Servidor MCP en primer plano.
+    - POST_NOTIFICATIONS: notificación del servicio en API 33+.
+  Nada de permisos de almacenamiento amplio: el sandbox trabaja en
+  noBackupFilesDir propio (W^X, sin lectura de storage externo).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:name=".FenixApplication"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.FenixMovil"
+        android:usesCleartextTraffic="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.FenixMovil">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+
+</manifest>

@@ -17,7 +17,11 @@ plugins {
 
 android {
     namespace = "com.fenix.movil"
-    compileSdk = 36
+    // Las libs de este ecosistema (Compose BOM 2026.08.00, navigation,
+    // hilt-navigation) exigen compileSdk 37 (docs/arquitectura.md
+    // contempla targetSdk 37). targetSdk queda en 36 estable (plan: 35+).
+    compileSdk = 37
+    compileSdkMinor = 0
 
     defaultConfig {
         applicationId = "com.fenix.movil"
@@ -68,6 +72,10 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "/META-INF/DEPENDENCIES"
+            excludes += "/META-INF/license/**"
+            excludes += "/META-INF/*.SF"
+            excludes += "/META-INF/*.DSA"
+            excludes += "/META-INF/*.RSA"
         }
     }
 
@@ -113,7 +121,7 @@ dependencies {
 
     // --- Ktor embebido (servidor MCP loopback localhost:8080/mcp) ---
     implementation(libs.ktor.server.core)
-    implementation(libs.ktor.server.netty)
+    implementation(libs.ktor.server.cio)
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.ktor.server.cors)

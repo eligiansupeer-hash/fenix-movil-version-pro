@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Tema base del framework (sin AppCompat): la UI real es Compose
+  con FenixTheme; este estilo solo evita el tema heredado del sistema
+  y define dark-only (los tableros Penpot solo existen en oscuro).
+-->
+<resources>
+    <style name="Theme.FenixMovil" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/fenix_window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

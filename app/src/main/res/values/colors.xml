@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Token Penpot: Superficie Base (fondo) #0A0B10 -->
+    <color name="fenix_window_background">#0A0B10</color>
+</resources>
