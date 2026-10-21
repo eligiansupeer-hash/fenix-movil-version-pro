@@ -1,0 +1,109 @@
+# ============================================================================
+# Gradle / Kotlin / Android — ignore completo
+# ============================================================================
+
+# --- Gradle ---
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!gradle/wrapper/gradle-wrapper.properties
+*.hprof
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+obj/
+
+# --- Kotlin / Java ---
+*.class
+*.jar
+!gradle/wrapper/*.jar
+*.war
+*.ear
+*.nar
+*.kt~
+*.java~
+*.class
+out/
+
+# --- Android Studio / IntelliJ ---
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+/navigation/index.xml
+*.hprof
+*.apk
+*.aab
+*.ap_
+*.dex
+bin/
+gen/
+gen/
+.externalNativeBuild
+.cxx
+
+# --- Signing (NUNCA subir keystores) ---
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.b64
+keystore.properties
+signing.properties
+
+# --- Secrets / variables de entorno ---
+.env
+.env.*
+!.env.example
+secrets.properties
+api_keys.json
+*.token
+*.token.*
+google-services.json
+
+# --- Logs / crash reports ---
+*.log
+logs/
+crash-reports/
+tombstones/
+
+# --- Testing ---
+test-results/
+reports/
+*.ec
+*.netrc
+
+# --- Node (scripts de tooling / web) ---
+node_modules/
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# --- Python (tools de build, si los hubiera) ---
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# --- Sandbox runtime descargado (rootfs NO va al repo) ---
+*.tar
+*.tar.gz
+*.tar.xz
+*.tgz
+rootfs-cache/
+app/src/main/assets/rootfs/
+app/src/main/jniLibs/arm64-v8a/*.so.dSYM
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+*~
+
+# --- Backups de editores ---
+*.bak
+*.swp
+*.swo
