@@ -5,7 +5,7 @@
 # ============================================================================
 
 [versions]
-agp = "8.13.2"
+agp = "9.0.0"
 kotlin = "2.4.10"
 ksp = "2.3.12"
 hilt = "2.60.1"
@@ -82,7 +82,7 @@ truth = { group = "com.google.truth", name = "truth", version.ref = "truth" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+# AGP 9 integró Kotlin: NO declarar org.jetbrains.kotlin.android (aborta config).
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
