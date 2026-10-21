@@ -70,11 +70,63 @@ violar por citarlo.)
   `export JAVA_HOME=/home/eli/opt/jdk-21.0.12.1+1 PATH=$JAVA_HOME/bin:$PATH`
 
 ### Pendiente (siguiente fase)
-- **Fase B (B1–B6): sandbox Linux propio** — proot + libtalloc con NDK r29
-  (ELF 16KB, verify `readelf`), rootfs Debian 12 arm64 con SHA-256,
-  `SandboxManager`, `ShellSession`, instalador de CLIs, auditoría SEG.
+- **Fase B (B1–B6): sandbox Linux propio** — ver detalle abajo; siguiente
+  tarea: **B2** (rootfs Debian 12 arm64 con SHA-256).
 - Nota: los directorios de referencia indicados en el plan
   (`/tmp/kai-ref/`, `/tmp/fenix-movil-oficial/`) **no existen en este
   entorno**; al ser la consigna escribir todo desde cero (sin copia), esto
   no bloquea: el comportamiento a conservar se especifica desde
   `biblioteca-fenix-v3/docs/` (autoridad) y este repo lo implementa desde cero.
+
+---
+
+## Fase B — Sandbox Linux propio (B1–B6) 🔄 EN CURSO
+
+### B1 — proot + libtalloc propios con NDK r29 ✅ COMPLETA
+
+**Verify ejecutado (exit 0):**
+- `bash tools/build-proot.sh` → build completo desde caché vacía:
+  descarga con SHA-256 OK, talloc + proot compilados, `libproot.so`
+  publicado (187280 bytes).
+- `bash tools/build-proot.sh --verify-only` → exit 0: ELF aarch64 para
+  Android 26 (intérprete `linker64`), **los 3 segmentos LOAD con
+  `p_align=0x4000`** (16 KB).
+- `./gradlew :app:assembleDebug` → exit 0; el APK contiene
+  `lib/arm64-v8a/libproot.so` (packaging `useLegacyPackaging=true` ya
+  configurado en fase A).
+- Barrera de limpieza F4 sobre el árbol completo → sin coincidencias.
+
+**Artefactos:**
+- `tools/build-proot.sh` (receta reproducible: fuentes pinneadas por
+  SHA-256, verificación de hash, build, strip, publicación, `--verify-only`).
+- `tools/android-bionic-config.h` (shim `config.h` de talloc para bionic 26).
+- `tools/loader-ld-script.ld` (script LLD del loader interno; evita el
+  ELF esparcido de ~128 GB).
+- `docs/build-proot.md` (receta completa, gotchas, licencias, nota de
+  verificación).
+- `app/src/main/jniLibs/arm64-v8a/libproot.so` (binario propio,
+  talloc estático, único NEEDED = `libc.so`/`libdl.so`).
+- Caché de build **fuera** del repo:
+  `${XDG_CACHE_HOME:-~/.cache}/fenix-proot-build` (el árbol upstream no
+  reside en el repo: integridad + barrera F4).
+
+**Desviación 7 — `verification_cmd` literal de B1 inaplicable:**
+- El plan lo escribe como `readelf -l <so> | grep -q "align 0x4000"`. Con
+  GNU binutils `readelf` esa cadena **no puede aparecer nunca**: `align`
+  solo existe en el encabezado de columna (`… Flags  Align`, A mayúscula) y
+  cada valor de alineación se imprime en la línea siguiente de su segmento,
+  sin la palabra al lado (verificado empíricamente: única ocurrencia de
+  `align` en la salida = línea 8, el encabezado).
+- Verificación implementada (equivalente y **más estricta**): parsear todos
+  los segmentos `LOAD` y exigir `p_align == 0x4000` en cada uno, más
+  `file` = ARM aarch64, más intérprete `linker64` → implementada en
+  `tools/build-proot.sh --verify-only` (exit 0). Detalle en
+  `docs/build-proot.md` (sección «Verificación»).
+- Resultado real del binario publicado: los 3 LOAD en `0x4000`.
+
+**Gotchas resueltos** (tabla completa en `docs/build-proot.md`): versión
+talloc parseada del tarball; rutas con espacios del repo vs
+`$(shell pkg-config)` de make (caché en path sin espacios); LLD
+`-Ttext=0x2000000000` → ELF de 128 GB (script de enlazador propio);
+`llvm-strip` no strippea el loader ligado en VMA alta (strip manual del
+binario final); waf/configure de talloc inaplicable en cross (shim header).
