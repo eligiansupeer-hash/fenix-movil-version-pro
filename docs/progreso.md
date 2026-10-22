@@ -81,6 +81,8 @@ violar por citarlo.)
   pendiente real: **B3** (`SandboxManager.kt`).
 - *Actualización 2026-10-21 (post-B3):* B1, B2 y B3 completas → siguiente
   pendiente real: **B4** (`ShellSession.kt`: PTY + streams + redimensión).
+- *Actualización 2026-10-22 (post-B4):* B1–B4 completas → siguiente
+  pendiente real: **B5** (ver plan; fase B continúa).
 
 ---
 
@@ -232,3 +234,83 @@ bind con ruta relativa rechazado · escritura y omisión de
     la máquina de estados sea determinista en pruebas (tiempo virtual de
     `runTest`) y no bloquee hilos en producción; el único bloqueo real
     (`SIGTERM` + gracia) corre en `Dispatchers.IO` dentro de `stop()`/`fail()`.
+
+---
+
+### B4 — `ShellSession.kt`: PTY, streams, escapes, UTF-8, redimensión ✅ COMPLETA
+
+**Verify ejecutado (exit 0):**
+- `./gradlew :app:testDebugUnitTest --tests '*ShellSession*'` →
+  **BUILD SUCCESSFUL: exit 0** (clase `com.fenix.movil.terminal.ShellSessionTest`,
+  20 tests, 0 fallos).
+- `./gradlew :app:testDebugUnitTest` (suite completa) → **96 tests,
+  0 fallos, 0 errores, 0 omitidos** (incluye las 22 de SandboxManager y
+  las nuevas de PTY).
+- `./gradlew :app:assembleDebug` → exit 0 (el subsistema entra en el APK).
+- Barrera de limpieza F4 sobre el árbol completo → sin coincidencias
+  (`grep … --exclude-dir=.git .` → exit 1).
+
+**Artefactos** (`app/src/main/java/com/fenix/movil/terminal/` y
+`sandbox/`):
+
+| Archivo | Rol |
+|---|---|
+| `PtyTransport.kt` | puerto `PtyTransport` (`stdin`/`stdout`/`stderr` crudos + `isTty` + `resize(size): Boolean` + `close(terminate)`), fiel al contrato de `ShellSession`. |
+| `TerminalChunk.kt` | tipos de token del escáner ANSI (`TEXT`/`ESCAPE`/`OSC`) y `AnsiToken`. |
+| `TerminalSize.kt` | value class `TerminalSize(rows, cols)` + `toProtocol()` ("filas columnas"). |
+| `Utf8StreamDecoder.kt` | decodificador UTF-8 incremental: un multibyte partido entre dos lecturas se ensambla (no duplica ni corrompe). |
+| `AnsiEscapeScanner.kt` | máquina de estados de escapes: CSI (`ESC [ … final`), OSC (`ESC ] … ST`), cadenas (`ESC P`/`ESC ^`/`ESC _`), abortos, y **flush de texto pendiente al fin del chunk** (sin esto el scrollback nunca se actualiza). |
+| `ShellSession.kt` | máquina de estados `IDLE/OPENING/OPEN/CLOSED`, `readLoop` sobre el stdout del transporte (dispatcher IO, búfer acotado, stop cooperativo), `sendLine` (`\r` en tty, `\n` en pipe), `resize` delegado, scrollback con tope. |
+| `sandbox/PtyHelper.kt` | helper POSIX de la sesión (ver `docs/shell-session.md`): template `fenix-pty.sh` (rol fuera + rol `--inside`), FIFO de control, acuse de ventana, `install()`. |
+| `sandbox/BridgePtyTransport.kt` | puente host↔PTY del guest: `PtyProcess`/`PtyProcessLauncher` (puerto para dobles de proceso), `ProcessBuilderPtyLauncher` real, `open()` (variante PTY + acuse inicial), `attach()`, `resize()` con acuse, `close()` idempotente. |
+
+**Cobertura de los tests del gate (`ShellSessionTest`, 20 casos):**
+transiciones de estado · `sendLine` con `isTty=true` (terminador `\r`) y
+`isTty=false` (`\n`) · `readLoop` alimentado por un `FeedableInputStream`
+(texto al scrollback, UTF-8 multibyte partido, escapes CSI/OSC) · tope de
+scrollback (evita crecimiento sin límite) · `resize` delegado al
+transporte · cierre cooperativo sin bloquear el hilo · doble `close`
+idempotente · errores de IO del stream → estado `CLOSED`.
+
+**Cobertura de los tests de soporte:** `AnsiEscapeScannerTest` (CSI
+partida entre dos feeds, OSC con ST, abortos, texto pendiente al fin del
+chunk) · `Utf8StreamDecoderTest` (multibyte partido, secuencias
+completas, bytes inválidos) · `TerminalSizeTest` (protocolo) ·
+`PtyHelperTest` (contenido determinista del template, instalación,
+canales) · `BridgePtyTransportTest` (variante PTY, argv de proot,
+protocolo de acuse con dobles, **integración real** con `script(1)`: echo
+aritmético, `stty size` tras resize, cierre limpio).
+
+**Desviaciones y decisiones registradas (numeración global):**
+
+12. **`verification_cmd` de B4 concretizado:** el plan escribe "test
+    unitario `ShellSession` exit 0"; se interpretó como
+    `./gradlew :app:testDebugUnitTest --tests '*ShellSession*'`, que
+    evalúa literalmente y sale 0. La suite completa (96 tests) también
+    pasa, incluyendo el test de integración real de la PTY.
+13. **`docs/shell-session.md` creado fuera del whitelist:** el KDoc de
+    `PtyHelper.kt` lo referencia como documento del diseño, y las reglas
+    del repo exigen que todo archivo referenciado exista. Es la única
+    escritura fuera de `app/src/main/java/**/{sandbox,terminal}/*`.
+
+**Decisiones de diseño (fuera de desviación, dentro del alcance):**
+
+- **PTY sin código nativo:** la consigna de B4 prohíbe código nativo
+  nuevo; bionic no expone `openpty()` portable. La PTY se materializa en
+  el rootfs de B2 con `script(1)` + `stty(1)`, y el host ve solo
+  tuberías + FIFO de control (`docs/shell-session.md`).
+- **`PtyTransport` separado de `SandboxProcessHandle` (B3):** la interfaz
+  de B3 no tiene streams crudos a propósito (sus hilos `OutputTail`
+  consumen stdout/stderr para el volcado de errores de arranque); una
+  sesión interactiva necesita el stream en vivo, así que es un puerto
+  aparte.
+- **Acuse de ventana (no a ciegas):** `resize()` devuelve `true` solo si
+  el guest confirmó la geometría aplicada en el tty; sin acuse devuelve
+  `false` y la llamada es reintentable (contrato de `PtyTransport`).
+- **Gotcha POSIX resoluble:** sin job control, la shell redirige el stdin
+  de listas asíncronas a `/dev/null`; `script(1)` corre en background y
+  vería EOF al instante (cerrando la pty). El helper salva el stdin real
+  en un fd y se lo pasa explícito. Detalle en `docs/shell-session.md`.
+- **Shell interior ignora SIGTERM:** el `trap` del rol fuera envía
+  `TERM` + `KILL` a `script(1)`; el kernel cierra el master y el slave
+  recibe `SIGHUP` (que sí mata la sesión interactiva).
