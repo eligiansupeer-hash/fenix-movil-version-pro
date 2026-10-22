@@ -77,6 +77,8 @@ violar por citarlo.)
   entorno**; al ser la consigna escribir todo desde cero (sin copia), esto
   no bloquea: el comportamiento a conservar se especifica desde
   `biblioteca-fenix-v3/docs/` (autoridad) y este repo lo implementa desde cero.
+- *Actualización 2026-10-21 (post-B2):* B1 y B2 completas → siguiente
+  pendiente real: **B3** (`SandboxManager.kt`).
 
 ---
 
@@ -130,3 +132,40 @@ talloc parseada del tarball; rutas con espacios del repo vs
 `-Ttext=0x2000000000` → ELF de 128 GB (script de enlazador propio);
 `llvm-strip` no strippea el loader ligado en VMA alta (strip manual del
 binario final); waf/configure de talloc inaplicable en cross (shim header).
+
+### B2 — rootfs Debian 12 Bookworm arm64 con SHA-256 ✅ COMPLETA
+
+**Verify ejecutado (exit 0):**
+- `bash tools/fetch-rootfs.sh --extract` → descarga completa desde la fuente
+  pinneada (94984164 bytes), SHA-256 OK, extracción OK, verificación profunda
+  OK: `etc/debian_version` = **12.15**, `libc6` = **2.36-9+deb12u14**
+  (confirma el target «Debian 12 Bookworm / glibc 2.36» de arquitectura.md).
+- `bash tools/fetch-rootfs.sh --verify-only` → **exit 0**: hash coincide con
+  el valor pinneado `5f626ce3cb8443b846aac19fb822212490098856815b4eb1952cd0d6a55abc23`.
+- Caminos negativos verificados (no vacuosamente en verde): tarball ausente →
+  exit 1; tarball con hash corrupto → exit 1; tarball íntegro → exit 0.
+- Barrera de limpieza F4 sobre el árbol completo → sin coincidencias.
+
+**Artefactos:**
+- `tools/fetch-rootfs.sh` (receta reproducible: fuente pinneada por versión +
+  SHA-256, fallback entre réplicas, verificación determinista, `--extract` con
+  chequeo profundo Debian 12 / glibc 2.36, `--verify-only`).
+- `docs/rootfs.md` (receta completa, por qué runtime y no embebido, licencias,
+  notas de verificación).
+
+**Gotchas / observaciones (detalle en `docs/rootfs.md`):**
+- **Fallback entre réplicas**: el host raíz
+  `images.linuxcontainers.org` estuvo degradado/tasa-limited durante la
+  primera tentativa de descarga de esta corrida (timeout de conexión); el
+  servidor publica detrás réplicas CDN (`{region}{n}mirror{n}.do…`) vía
+  redirect 302. Se implementó una lista de candidatos ordenada (canónico
+  primero, luego réplicas observadas) que solo afecta **disponibilidad**,
+  nunca **integridad**: cualquier host sirve el mismo byte y el SHA-256
+  pinneado decide si el artefacto es aceptado. La segunda tentativa (tras
+  recuperación del host raíz) completó sin necesidad de fallback.
+- **Runtime, no embebido**: el rootfs (~90 MB) se descarga en runtime con
+  SHA-256, materializando la mitigación de riesgo del plan («Rootfs Debian 12
+  > tamaño APK»); no hay ningún activo en `app/src/main/assets/` (el scope
+  lo permitía, no lo requería).
+- `verification_cmd` de B2 **no** requirió enmienda: es evaluable literalmente
+  tal como figura en el plan (a diferencia de B1, ver Desviación 7).
