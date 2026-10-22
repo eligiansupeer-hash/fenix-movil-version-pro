@@ -83,10 +83,13 @@ violar por citarlo.)
   pendiente real: **B4** (`ShellSession.kt`: PTY + streams + redimensión).
 - *Actualización 2026-10-22 (post-B4):* B1–B4 completas → siguiente
   pendiente real: **B5** (ver plan; fase B continúa).
+- *Actualización 2026-10-22 (post-B6):* **Fase B completa (B1–B6)** →
+  siguiente pendiente real: **C1** (servidor Ktor embebido + endpoint
+  `/mcp`); arranca la Fase C (backend MCP del móvil).
 
 ---
 
-## Fase B — Sandbox Linux propio (B1–B6) 🔄 EN CURSO
+## Fase B — Sandbox Linux propio (B1–B6) ✅ COMPLETA
 
 ### B1 — proot + libtalloc propios con NDK r29 ✅ COMPLETA
 
@@ -390,3 +393,53 @@ segmentos faltantes, `satisfies`).
   implementación real se inyecta vía Hilt.
 - **Sin deuda (DEUDA-0):** ningún `TODO`/`FIXME` en el alcance; todas las
   rutas terminales están publicadas en el flujo.
+
+### B6 — Auditoría de seguridad del sandbox ✅ COMPLETA
+
+**Verify ejecutado (exit 0):** gate determinista sobre el informe
+`docs/auditoria-sandbox.md`: parseo exige los 6 ítems `SEG-01`…`SEG-06`
+con veredicto explícito → **GATE_B6=PASS** (6 veredictos: SEG-01 CUMPLE,
+SEG-02 CUMPLE base, SEG-03 CUMPLE, SEG-04 CUMPLE base, SEG-05 CUMPLE,
+SEG-06 CUMPLE). Auditoría read-only: sin mutación de código. Verificaciones
+de soporte corridas sobre el árbol auditado (commit `5a4053e`):
+
+- `./gradlew :app:testDebugUnitTest` → **exit 0** — 10 clases, 138 tests,
+  0 fallos.
+- `./gradlew :app:assembleDebug` → exit 0 (APK contiene
+  `lib/arm64-v8a/libproot.so`, 187280 B).
+- Barrera de limpieza F4 sobre el árbol completo → sin coincidencias.
+
+**Artefacto:** `docs/auditoria-sandbox.md` — checklist SEG-01…SEG-06
+(autoridad: `biblioteca-fenix-v3/docs/seguridad.md`) con evidencia
+localizable (ruta:línea o comando+resultado), defensas observadas
+(alfabetos anti-inyección del instalador, tuberías acotadas, validación
+de binds, confinamiento de estados) y tabla de comandos deterministas.
+
+**Resumen de hallazgos por política:**
+
+| Política | Veredicto | Evidencia clave |
+|---|---|---|
+| SEG-01 captura de pantalla | CUMPLE | grep screencap/MediaProjection → 0; sin permiso en manifest |
+| SEG-02 credenciales | CUMPLE (base) | 0 secretos en código/git; rootfs y backup excluidos; bóveda KeystoreVault = C5 pendiente |
+| SEG-03 aislamiento | CUMPLE | entorno `clear()` + repoblado; binds solo `/dev`,`/proc`,`/sys`,`/fenix`; proot desde `nativeLibraryDir` |
+| SEG-04 prompts con credenciales | CUMPLE (base) | sin ruta LLM aún (C1/C3 deberán mantenerlo) |
+| SEG-05 accesibilidad | CUMPLE | sin AccessibilityService declarado (E2 solo opt-in) |
+| SEG-06 W^X | CUMPLE | proot como .so en `jniLibs`, LOAD `p_align=0x4000`, targetSdk 36, sin ejecución externa |
+
+**Desviaciones y decisiones registradas (numeración global):**
+
+17. **Rol asignado vs. ejecutor:** el plan asigna B6 a `axiom_auditor`
+    con scope read-only; el despacho del driver autónomo encargó la
+    ejecución a `axiom_ingeniero`. El alcance se mantuvo estrictamente
+    read-only (única escritura: el informe + esta sección), sin mutar
+    código ni tests.
+18. **Gate de B6 concretizado:** el plan lo escribe como "informe
+    `docs/auditoria-sandbox.md` con checklist SEG-01…SEG-06 completado";
+    se evaluó de forma determinista con un parseo que exige los 6 ítems
+    con veredicto (6/6 presentes → PASS), en lugar de una revisión a ojo.
+
+**Nota de re-auditoría obligatoria:** los controles positivos cuya
+superficie aún no existe — bóveda de credenciales (C5), transporte con
+asistencia LLM (C1/C3, con DLP sanitizando salidas) y accesibilidad
+opt-in (E2) — quedan como CUMPLE base; al implementarse requieren nueva
+auditoría SEG-02/SEG-04/SEG-05 correspondiente.
