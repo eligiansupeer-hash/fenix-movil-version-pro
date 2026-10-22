@@ -79,6 +79,8 @@ violar por citarlo.)
   `biblioteca-fenix-v3/docs/` (autoridad) y este repo lo implementa desde cero.
 - *Actualización 2026-10-21 (post-B2):* B1 y B2 completas → siguiente
   pendiente real: **B3** (`SandboxManager.kt`).
+- *Actualización 2026-10-21 (post-B3):* B1, B2 y B3 completas → siguiente
+  pendiente real: **B4** (`ShellSession.kt`: PTY + streams + redimensión).
 
 ---
 
@@ -169,3 +171,64 @@ binario final); waf/configure de talloc inaplicable en cross (shim header).
   lo permitía, no lo requería).
 - `verification_cmd` de B2 **no** requirió enmienda: es evaluable literalmente
   tal como figura en el plan (a diferencia de B1, ver Desviación 7).
+
+### B3 — `SandboxManager.kt`: montaje, arranque y parada ✅ COMPLETA
+
+**Verify ejecutado (exit 0):**
+- `./gradlew :app:testDebugUnitTest --tests '*SandboxManager*'` →
+  **BUILD SUCCESSFUL: 22 tests, 0 fallos, 0 errores, 0 omitidos**
+  (clase `com.fenix.movil.sandbox.SandboxManagerTest`, 1.19 s).
+- `./gradlew :app:assembleDebug` → exit 0 (el subsistema entra en el APK
+  con Hilt y **sin warnings de compilación**; DEUDA-0).
+- Barrera de limpieza F4 sobre el árbol completo → sin coincidencias
+  (`grep … --exclude-dir=.git .` → exit 1).
+
+**Artefactos** (`app/src/main/java/com/fenix/movil/sandbox/`):
+
+| Archivo | Rol |
+|---|---|
+| `SandboxState.kt` | enum `STOPPED/BOOTING/RUNNING/ERROR` + documento de transiciones. |
+| `BindMount.kt` | montaje host→guest (`-b host[:guest]`); rutas **absolutas** obligatorias (rechazo ruidoso en `init`). |
+| `SandboxConfig.kt` | config inmutable, `validationError()` (antes de lanzar), `buildCommand()` (argv proot completo), `guestEnvironment()` (aislado vía `env -i`), `hostEnvironment()` (entorno **reemplazado**, nada heredado), `resolvConfContent()`. |
+| `SandboxProcess.kt` | interfaces `SandboxProcessLauncher`/`SandboxProcessHandle` (**puerto donde B4 enchufará la PTY**) + `ProcessBuilderLauncher` real: entorno reemplazado y stdout/stderr consumidos por hilos daemon con búfer acotado (si nadie los leyera, la tubería de 64 KB bloquearía el sandbox). |
+| `SandboxManager.kt` | máquina de estados con `Mutex` (`start`/`stop` serializados), ventana de gracia de arranque, supervisor de vida por `delay` (tiempo virtual, sin `waitFor` bloqueante), SIGTERM→SIGKILL en la parada, volcado de DNS. |
+| `SandboxPaths.kt` | rutas reales desde `Context` (arquitectura.md §3): `nativeLibraryDir/libproot.so`, `noBackupFilesDir/sandbox/debian-12`, `filesDir/sandbox-share` → `/fenix`, DNS desde `LinkProperties`. |
+| `SandboxModule.kt` | proveedor Hilt `@Singleton` de `SandboxManager`. |
+| `app/src/test/…/SandboxManagerTest.kt` | test del gate (22 casos) + ciclo real con `ProcessBuilder`. |
+
+**Cobertura de los 22 tests:** construcción del argv (rootfs, binds
+`/dev` `/proc` `/sys`, `-w`, `-0`, `--link2symlink`, `--kill-on-exit`, `-v`,
+`env -i …`, comando guest al final) · aislamiento host/guest ·
+transición `STOPPED→BOOTING→RUNNING` observada como `StateFlow` · 6
+validaciones que impiden lanzar (rootfs ausente, rootfs sin
+`etc/debian_version`, proot ausente, proot no ejecutable, `pollIntervalMs≤0`
+—contra bucle infinito—, fallo del launcher) · muerte dentro de la ventana
+de gracia → `ERROR` con código + cola de stderr · `stop()` con destrucción
+del proceso e idempotencia · no-relanzo en `RUNNING` · reinicio desde
+`ERROR` · salida inesperada (≠0) → `ERROR`, salida limpia (=0) → `STOPPED` ·
+bind con ruta relativa rechazado · escritura y omisión de
+`etc/resolv.conf` · ciclo real end-to-end con `ProcessBuilder`
+(`Assume` sobre `/bin/sh`).
+
+**Desviaciones y decisiones registradas (numeración global):**
+
+8. **DNS del dispositivo volcado al rootfs (incluido en B3, sin tarea propia):**
+   bionic resuelve vía *netd* y no publica un `/etc/resolv.conf` que el
+   guest pueda leer. `SandboxPaths` lee los servidores de
+   `LinkProperties` (requiere `ACCESS_NETWORK_STATE`, ya declarado en el
+   manifest) y `SandboxManager` los vuelca en `<rootfs>/etc/resolv.conf`
+   **solo si cambiaron** (no reescribe el rootfs en cada arranque); sin
+   DNS configurados no se toca el archivo. Cero valores fijos (RN-06).
+9. **Sin montaje de storage externo:** los binds por defecto son `/dev`,
+   `/proc`, `/sys` más la carpeta privada de la app (`…/sandbox-share`
+   → `/fenix`, mismo UID que la app: no amplía privilegios). `/sdcard` y
+   `/storage` quedan **fuera** a propósito: la auditoría B6 exige que el
+   sandbox no ejecute ni lea storage externo.
+10. **`verification_cmd` de B3 sin enmienda:** `./gradlew
+    :app:testDebugUnitTest --tests '*SandboxManager*'` es evaluable
+    literalmente y sale 0 (a diferencia de B1, ver Desviación 7).
+11. **Supervisor por tiempo virtual:** la vida del proceso se sondea con
+    `delay` sobre el scope inyectado y no con `Process.waitFor`, para que
+    la máquina de estados sea determinista en pruebas (tiempo virtual de
+    `runTest`) y no bloquee hilos en producción; el único bloqueo real
+    (`SIGTERM` + gracia) corre en `Dispatchers.IO` dentro de `stop()`/`fail()`.
