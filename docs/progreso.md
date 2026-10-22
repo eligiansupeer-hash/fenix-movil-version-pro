@@ -314,3 +314,79 @@ aritmético, `stty size` tras resize, cierre limpio).
 - **Shell interior ignora SIGTERM:** el `trap` del rol fuera envía
   `TERM` + `KILL` a `script(1)`; el kernel cierra el master y el slave
   recibe `SIGHUP` (que sí mata la sesión interactiva).
+
+---
+
+### B5 — Instalador de CLIs dentro del sandbox ✅ COMPLETA
+
+**Verify ejecutado (exit 0):**
+- `./gradlew :app:testDebugUnitTest --tests '*CliInstaller*'` →
+  **BUILD SUCCESSFUL: exit 0** (clase `com.fenix.movil.sandbox.installer.CliInstallerTest`,
+  9 tests, 0 fallos).
+- `./gradlew :app:testDebugUnitTest` (suite completa) → **BUILD SUCCESSFUL:
+  exit 0** — 10 clases, **138 tests, 0 fallos, 0 errores, 0 omitidos**
+  (incluye las 41 de installer y las 96 heredadas de B3/B4).
+- `./gradlew :app:assembleDebug` → exit 0 (el subsistema entra en el APK).
+- `./gradlew :app:kspDebugKotlin --rerun-tasks` → exit 0: los `@Provides`
+  de `InstallerModule` generan sus factories (`InstallerModule_ProvideCliInstallerFactory`,
+  `InstallerModule_ProvideNetworkProbeFactory`) y llegan al dex.
+- Barrera de limpieza F4 sobre el árbol completo → sin coincidencias
+  (`grep … --exclude-dir=.git .` → exit 1).
+
+**Artefactos** (`app/src/main/java/com/fenix/movil/sandbox/installer/`):
+
+| Archivo | Rol |
+|---|---|
+| `CliSpec.kt` | descriptor de CLI (id, binario, dependencias apt, acciones, `minVersion`); registro por defecto. |
+| `InstallAction.kt` | `AptInstall` / `NpmGlobalInstall` con receta shell determinista y alfabetos anti-inyección. |
+| `InstallPlan.kt` | plan de pasos: `apt:base` fusionado + un paso npm por CLI. |
+| `VersionDetector.kt` | parseo de versión y comparación por segmentos. |
+| `NetworkProbe.kt` | puerto de red + implementación sobre el estado del sistema. |
+| `GuestCommandRunner.kt` | puerto para ejecutar comandos de instalación en el sandbox. |
+| `InstallState.kt` | fases, `CliStatus` e `InstallerReport`. |
+| `CliInstaller.kt` | orquestador: `CHECKING → INSTALLING → VERIFYING → READY/FAILED`. |
+| `InstallerModule.kt` | proveedores Hilt (`CliInstaller`, `NetworkProbe`). |
+
+**Cobertura de los tests del gate (`CliInstallerTest`, 9 casos):**
+máquina de fases · red ausente no ejecuta instalación · todo instalado no
+pide red · secuencia exacta de comandos con sus timeouts · fallo de paso
+corta el resto y cierra en `FAILED` · error del runner se reporta sin
+propagarse · fase terminal siempre publicada en el `StateFlow` ·
+constructor valida timeouts no positivos · constructor rechaza registro vacío.
+
+**Cobertura de los tests de soporte:** `InstallPlanTest` (20 casos: fusión
+de apt, orden determinista, idempotencia, `minVersion`, validaciones) ·
+`VersionDetectorTest` (13 casos: formatos reales, pre-lanzamiento,
+segmentos faltantes, `satisfies`).
+
+**Desviaciones y decisiones registradas (numeración global):**
+
+14. **Gate de B5 concretizado:** el plan escribe "test de plan de
+    instalación (mock) exit 0"; se interpretó como
+    `./gradlew :app:testDebugUnitTest --tests '*CliInstaller*'` (la clase
+    que orquesta el plan), que evalúa literalmente y sale 0. La suite
+    completa (138 tests) también pasa.
+15. **CLIs por defecto = opencode / claude-code / codex-cli:** el plan no
+    fija cuáles; se eligieron los tres agentes CLI que el propio sandbox
+    ya usa en el ecosistema Fénix, empaquetados como `opencode-ai`,
+    `@anthropic-ai/claude-code` y `@openai/codex` (solo nombres de
+    paquete, sin registry ni URL).
+16. **Estado del `StateFlow`:** un test inicial dejó la fase final sin
+    publicar al colarse en el `launch` de prueba; se fijó el contrato de
+    `publish()` para que toda fase terminal (`READY`/`FAILED`) quede en
+    el flujo, y el test ahora afirma `phases.contains(READY)` sin
+    collector infinito vivo (que bloqueaba el fin del `runTest`).
+
+**Decisiones de diseño (fuera de desviación, dentro del alcance):**
+
+- **`apt:base` fusionado y deduplicado:** los paquetes apt declarados por
+  cada CLI se fusionan en un solo paso, en orden estable, evitando N
+  `apt-get install` redundantes.
+- **Fase de verificación separada de la instalación:** `CHECKING` y
+  `VERIFYING` son fases propias, no pasos del plan; el plan solo describe
+  instalación, lo que lo mantiene determinista y testeable.
+- **`GuestCommandRunner` es un puerto:** la instalación no depende de la
+  implementación del sandbox; el doble de pruebas la sustituye, y la
+  implementación real se inyecta vía Hilt.
+- **Sin deuda (DEUDA-0):** ningún `TODO`/`FIXME` en el alcance; todas las
+  rutas terminales están publicadas en el flujo.
