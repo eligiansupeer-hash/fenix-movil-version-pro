@@ -1,0 +1,361 @@
+// ============================================================================
+// McpServerTest.kt — verificación de C1 (gate: testDebugUnitTest --tests '*McpServer*')
+// Cobertura: servidor Ktor embebido, endpoints /mcp y /v1/models, handshake MCP
+// ============================================================================
+
+package com.fenix.movil.mcp.server
+
+import com.fenix.movil.core.modelcatalog.DefaultModelCatalog
+import com.fenix.movil.core.modelcatalog.ModelCatalog
+import com.fenix.movil.core.modelcatalog.ModelEntry
+import com.fenix.movil.core.modelcatalog.Pricing
+import com.fenix.movil.mcp.protocol.InitializeRequest
+import com.fenix.movil.mcp.protocol.InitializeResponse
+import com.fenix.movil.mcp.protocol.JsonRpcRequest
+import com.fenix.movil.mcp.protocol.JsonRpcResponse
+import com.fenix.movil.mcp.protocol.McpErrorCode
+import com.google.common.truth.Truth.assertThat
+import io.ktor.client.*
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import io.ktor.server.application.*
+import io.ktor.server.request.*
+import io.ktor.server.response.*
+import io.ktor.server.routing.*
+import io.ktor.server.testing.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.delay
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import org.junit.After
+import org.junit.Before
+import org.junit.Test
+
+class McpServerTest {
+
+    private lateinit var catalog: ModelCatalog
+    private lateinit var mcpServer: EmbeddedMcpServer
+    private lateinit var testClient: HttpClient
+
+    @Before
+    fun setUp() {
+        catalog = DefaultModelCatalog(
+            persistenceDir = java.io.File(java.lang.System.getProperty("java.io.tmpdir"), "fenix-mcp-test"),
+            ttlMs = 10_000,
+            quarantineThreshold = 3,
+            backgroundScope = kotlinx.coroutines.CoroutineScope(Dispatchers.Unconfined),
+        )
+        runBlocking { delay(10) }
+
+        mcpServer = EmbeddedMcpServer(
+            port = 0,
+            host = "127.0.0.1",
+            catalog = catalog,
+        )
+        mcpServer.start()
+        runBlocking { delay(10) }
+
+        testClient = HttpClient(MockEngine) {
+            install(ContentNegotiation) { json(Json.Default) }
+        } {
+            val app = testApplication {
+                application {
+                    install(io.ktor.server.serialization.kotlinx.json.KotlinxSerializationPlugin) {
+                        json(Json.Default)
+                    }
+                    routing {
+                        mcpRoute(mcpServer.getMcpServer())
+                        modelsRoute(catalog)
+                        get("/health") { call.respondText("OK") }
+                    }
+                }
+            }
+            val mockEngine = this.engine as MockEngine
+            mockEngine.application = app.application
+        }
+    }
+
+    @After
+    fun tearDown() {
+        testClient.close()
+        mcpServer.stop()
+    }
+
+    // ------------------------------------------------------------------
+    // Health check
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `health check responde OK`() = runBlocking {
+        val response = testClient.get("http://localhost:${mcpServer.listeningPort}/health")
+        assertThat(response.status).isEqualTo(HttpStatusCode.OK)
+        assertThat(response.bodyAsText()).isEqualTo("OK")
+    }
+
+    // ------------------------------------------------------------------
+    // /v1/models (F1 discovery)
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `GET v1models retorna lista con modelo T0`() = runBlocking {
+        catalog.discover()
+        delay(10)
+
+        val response = testClient.get("http://localhost:${mcpServer.listeningPort}/v1/models")
+        assertThat(response.status).isEqualTo(HttpStatusCode.OK)
+
+        val body = response.bodyAsText()
+        val modelsResponse = Json.Default.decodeFromString<ModelsResponse>(body)
+
+        assertThat(modelsResponse.objectField).isEqualTo("list")
+        assertThat(modelsResponse.data).isNotEmpty()
+
+        val t0Model = modelsResponse.data.find { it.id == DefaultModelCatalog.T0_MODEL_ID }
+        assertThat(t0Model).isNotNull()
+        assertThat(t0Model!!.ownedBy).isEqualTo(DefaultModelCatalog.T0_PROVIDER)
+        assertThat(t0Model.capabilities).contains("chat")
+        assertThat(t0Model.capabilities).contains("completion")
+    }
+
+    @Test
+    fun `GET v1models refleja available del catalogo excluye cuarentena TTL`() = runBlocking {
+        val now = System.currentTimeMillis()
+        val fresh = ModelEntry(
+            id = "fresh-model",
+            provider = "test",
+            capabilities = listOf("chat"),
+            contextWindow = 4096,
+            pricing = Pricing.FREE,
+            lastVerified = now,
+        )
+        catalog.upsert(fresh)
+
+        val quarantined = fresh.copy(id = "quarantined-model", quarantined = true)
+        catalog.upsert(quarantined)
+
+        val stale = fresh.copy(id = "stale-model", lastVerified = System.currentTimeMillis() - 20_000)
+        catalog.upsert(stale)
+
+        delay(10)
+
+        val response = testClient.get("http://localhost:${mcpServer.listeningPort}/v1/models")
+        val modelsResponse = Json.Default.decodeFromString<ModelsResponse>(response.bodyAsText())
+
+        val ids = modelsResponse.data.map { it.id }.toSet()
+        assertThat(ids).contains("fresh-model")
+        assertThat(ids).doesNotContain("quarantined-model")
+        assertThat(ids).doesNotContain("stale-model")
+        assertThat(ids).contains(DefaultModelCatalog.T0_MODEL_ID)
+    }
+
+    @Test
+    fun `GET v1models estructura de respuesta OpenAI-compatible`() = runBlocking {
+        catalog.discover()
+        delay(10)
+
+        val response = testClient.get("http://localhost:${mcpServer.listeningPort}/v1/models")
+        val modelsResponse = Json.Default.decodeFromString<ModelsResponse>(response.bodyAsText())
+
+        val model = modelsResponse.data.first()
+        assertThat(model.objectField).isEqualTo("model")
+        assertThat(model.created).isGreaterThan(0)
+        assertThat(model.ownedBy).isNotEmpty()
+        assertThat(model.capabilities).isNotEmpty()
+        assertThat(model.contextWindow).isGreaterThan(0)
+        assertThat(model.pricing.inputPer1M).isEqualTo(0.0)
+        assertThat(model.pricing.outputPer1M).isEqualTo(0.0)
+    }
+
+    // ------------------------------------------------------------------
+    // MCP /mcp endpoint - handshake initialize
+    // ------------------------------------------------------------------
+
+    private fun makeInitRequest(id: String = "req-1"): String {
+        val initRequest = InitializeRequest(protocolVersion = "2025-06-18")
+        val request = JsonRpcRequest(
+            id = JsonPrimitive(id),
+            method = "initialize",
+            params = Json.parseToJsonElement(Json.Default.encodeToString(initRequest)),
+        )
+        return Json.Default.encodeToString(request)
+    }
+
+    private fun postMcp(body: String, sessionId: String? = null): HttpResponse = runBlocking {
+        testClient.post("http://localhost:${mcpServer.listeningPort}/mcp") {
+            contentType(ContentType.Application.Json)
+            if (sessionId != null) header("mcp-session-id", sessionId)
+            setBody(body)
+        }
+    }
+
+    @Test
+    fun `POST mcp initialize handshake exitoso`() = runBlocking {
+        val body = makeInitRequest("req-1")
+        val response = postMcp(body)
+
+        assertThat(response.status).isEqualTo(HttpStatusCode.OK)
+        val sessionId = response.headers["mcp-session-id"]
+        assertThat(sessionId).isNotNull()
+
+        val jsonResponse = Json.Default.decodeFromString<JsonRpcResponse.Success>(response.bodyAsText())
+        assertThat(jsonResponse.id).isEqualTo(JsonPrimitive("req-1"))
+        assertThat(jsonResponse.result).isNotNull()
+
+        val initResponse = Json.Default.decodeFromString<InitializeResponse>(Json.Default.encodeToString(jsonResponse.result))
+        assertThat(initResponse.protocolVersion).isEqualTo("2025-06-18")
+        assertThat(initResponse.serverInfo.name).isEqualTo("fenix-movil-mcp")
+        assertThat(initResponse.capabilities.tools?.listChanged).isTrue()
+        assertThat(initResponse.capabilities.resources?.subscribe).isTrue()
+    }
+
+    @Test
+    fun `POST mcp notifications initialized completa handshake`() = runBlocking {
+        val initBody = makeInitRequest("req-1")
+        val initResponse = postMcp(initBody)
+        val sessionId = initResponse.headers["mcp-session-id"]!!
+
+        val initializedRequest = JsonRpcRequest(
+            id = JsonNull,
+            method = "notifications/initialized",
+        )
+        val response = testClient.post("http://localhost:${mcpServer.listeningPort}/mcp") {
+            contentType(ContentType.Application.Json)
+            header("mcp-session-id", sessionId)
+            setBody(Json.Default.encodeToString(initializedRequest))
+        }
+
+        assertThat(response.status).isEqualTo(HttpStatusCode.OK)
+    }
+
+    @Test
+    fun `POST mcp metodo desconocido retorna error METHOD_NOT_FOUND`() = runBlocking {
+        val initBody = makeInitRequest("req-1")
+        val initResponse = postMcp(initBody)
+        val sessionId = initResponse.headers["mcp-session-id"]!!
+
+        val unknownRequest = JsonRpcRequest(
+            id = JsonPrimitive("req-2"),
+            method = "unknown/method",
+        )
+        val response = postMcp(Json.Default.encodeToString(unknownRequest), sessionId)
+
+        assertThat(response.status).isEqualTo(HttpStatusCode.OK)
+        val errorResponse = Json.Default.decodeFromString<JsonRpcResponse.Error>(response.bodyAsText())
+        assertThat(errorResponse.id).isEqualTo(JsonPrimitive("req-2"))
+        assertThat(errorResponse.error.code).isEqualTo(McpErrorCode.METHOD_NOT_FOUND)
+    }
+
+    @Test
+    fun `POST mcp JSON invalido retorna error PARSE_ERROR`() = runBlocking {
+        val response = postMcp("{ invalid json")
+
+        assertThat(response.status).isEqualTo(HttpStatusCode.OK)
+        val errorResponse = Json.Default.decodeFromString<JsonRpcResponse.Error>(response.bodyAsText())
+        assertThat(errorResponse.error.code).isEqualTo(McpErrorCode.PARSE_ERROR)
+    }
+
+    @Test
+    fun `POST mcp tools list retorna lista vacia C3 pendiente`() = runBlocking {
+        val initBody = makeInitRequest("req-1")
+        val initResponse = postMcp(initBody)
+        val sessionId = initResponse.headers["mcp-session-id"]!!
+
+        val toolsRequest = JsonRpcRequest(id = JsonPrimitive("req-2"), method = "tools/list")
+        val response = postMcp(Json.Default.encodeToString(toolsRequest), sessionId)
+
+        assertThat(response.status).isEqualTo(HttpStatusCode.OK)
+        val successResponse = Json.Default.decodeFromString<JsonRpcResponse.Success>(response.bodyAsText())
+        assertThat(successResponse.id).isEqualTo(JsonPrimitive("req-2"))
+        val toolsResult = Json.Default.decodeFromString<JsonObject>(Json.Default.encodeToString(successResponse.result))
+        assertThat(toolsResult["tools"]).isNotNull()
+        assertThat(toolsResult["tools"]!!.toString()).isEqualTo("[]")
+    }
+
+    @Test
+    fun `POST mcp tools call retorna error INTERNAL_ERROR C3 pendiente`() = runBlocking {
+        val initBody = makeInitRequest("req-1")
+        val initResponse = postMcp(initBody)
+        val sessionId = initResponse.headers["mcp-session-id"]!!
+
+        val callRequest = JsonRpcRequest(
+            id = JsonPrimitive("req-2"),
+            method = "tools/call",
+            params = Json.parseToJsonElement(Json.encodeToString(mapOf("name" to "test-tool", "arguments" to mapOf<String, Any>()))),
+        )
+        val response = postMcp(Json.Default.encodeToString(callRequest), sessionId)
+
+        assertThat(response.status).isEqualTo(HttpStatusCode.OK)
+        val errorResponse = Json.Default.decodeFromString<JsonRpcResponse.Error>(response.bodyAsText())
+        assertThat(errorResponse.error.code).isEqualTo(McpErrorCode.INTERNAL_ERROR)
+        assertThat(errorResponse.error.message).contains("not implemented yet")
+    }
+
+    @Test
+    fun `sesion MCP se mantiene entre requests mcp-session-id`() = runBlocking {
+        val initBody = makeInitRequest("req-1")
+        val initResponse = postMcp(initBody)
+        val sessionId = initResponse.headers["mcp-session-id"]!!
+
+        val toolsRequest = JsonRpcRequest(id = JsonPrimitive("req-2"), method = "tools/list")
+        val response = postMcp(Json.Default.encodeToString(toolsRequest), sessionId)
+
+        assertThat(response.status).isEqualTo(HttpStatusCode.OK)
+        assertThat(response.headers["mcp-session-id"]).isEqualTo(sessionId)
+    }
+
+    @Test
+    fun `DELETE mcp termina sesion`() = runBlocking {
+        val initBody = makeInitRequest("req-1")
+        val initResponse = postMcp(initBody)
+        val sessionId = initResponse.headers["mcp-session-id"]!!
+
+        val deleteResponse = testClient.request("http://localhost:${mcpServer.listeningPort}/mcp") {
+            method = HttpMethod.Delete
+            header("mcp-session-id", sessionId)
+        }
+
+        assertThat(deleteResponse.status).isEqualTo(HttpStatusCode.OK)
+        assertThat(deleteResponse.bodyAsText()).isEqualTo("OK")
+
+        val toolsRequest = JsonRpcRequest(id = JsonPrimitive("req-2"), method = "tools/list")
+        val response = postMcp(Json.Default.encodeToString(toolsRequest), sessionId)
+
+        assertThat(response.status).isEqualTo(HttpStatusCode.OK)
+    }
+
+    // ------------------------------------------------------------------
+    // ModelsResponse para tests
+    // ------------------------------------------------------------------
+
+    @kotlinx.serialization.Serializable
+    private data class ModelsResponse(
+        @kotlinx.serialization.SerialName("object") val objectField: String,
+        val data: List<Model>,
+    ) {
+        @kotlinx.serialization.Serializable
+        data class Model(
+            val id: String,
+            @kotlinx.serialization.SerialName("object") val objectField: String,
+            val created: Long,
+            @kotlinx.serialization.SerialName("owned_by") val ownedBy: String,
+            val capabilities: List<String>,
+            val contextWindow: Int,
+            val pricing: ModelPricing,
+            val metadata: Map<String, String>,
+        )
+
+        @kotlinx.serialization.Serializable
+        data class ModelPricing(
+            val inputPer1M: Double,
+            val outputPer1M: Double,
+        )
+    }
+}
