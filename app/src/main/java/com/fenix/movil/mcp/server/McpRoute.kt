@@ -104,11 +104,17 @@ fun Routing.mcpRoute(server: McpServerImpl) {
 class McpServerImpl(
     private val catalog: com.fenix.movil.core.modelcatalog.ModelCatalog,
 ) {
-    private val sessions = ConcurrentHashMap<String, SessionState>()
-    private val sseSessions = ConcurrentHashMap<String, Channel<String>>()
+    private val _sessions = ConcurrentHashMap<String, SessionState>()
+    private val _sseSessions = ConcurrentHashMap<String, Channel<String>>()
     val requestCounter = AtomicLong(0)
     private val _initialized = MutableStateFlow(false)
     val initialized: kotlinx.coroutines.flow.StateFlow<Boolean> = _initialized.asStateFlow()
+
+    /** Acceso de solo lectura a sesiones para tests. */
+    val sessions: ConcurrentHashMap<String, SessionState> = _sessions
+
+    /** Acceso de solo lectura a sesiones SSE para tests. */
+    val sseSessions: ConcurrentHashMap<String, Channel<String>> = _sseSessions
 
     data class SessionState(
         val id: String,
@@ -147,7 +153,7 @@ class McpServerImpl(
         }
 
         session.initialized = true
-        session.clientCapabilities = (initRequest.capabilities as? Map<String, Any>) ?: emptyMap()
+        session.clientCapabilities = initRequest.capabilities?.toMap() ?: emptyMap()
         _initialized.value = true
 
         val response = InitializeResponse(

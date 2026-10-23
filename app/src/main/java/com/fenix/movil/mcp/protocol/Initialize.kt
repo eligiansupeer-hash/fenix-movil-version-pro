@@ -20,7 +20,14 @@ data class ClientCapabilities(
     val roots: RootsCapability? = null,
     val sampling: SamplingCapability? = null,
     val elicitation: ElicitationCapability? = null,
-)
+) {
+    /** Convierte a Map para almacenamiento en SessionState. */
+    fun toMap(): Map<String, Any> = buildMap<String, Any> {
+        roots?.let { put("roots", mapOf("listChanged" to it.listChanged)) }
+        if (sampling != null) put("sampling", emptyMap<String, Any>())
+        if (elicitation != null) put("elicitation", emptyMap<String, Any>())
+    }
+}
 
 @Serializable
 data class RootsCapability(val listChanged: Boolean = false)
